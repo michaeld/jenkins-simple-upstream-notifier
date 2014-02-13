@@ -1,25 +1,27 @@
 package jenkins.plugins.simpleupstreamnotifier;
+
 import com.google.common.base.Function;
 import com.google.common.collect.Collections2;
 import hudson.Extension;
 import hudson.Launcher;
+import hudson.Util;
 import hudson.model.*;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Notifier;
 import hudson.tasks.Publisher;
+import hudson.tasks.i18n.*;
 import jenkins.model.Jenkins;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.Predicate;
 import org.apache.commons.lang.StringUtils;
 import org.apache.tools.ant.taskdefs.email.Mailer;
 import org.kohsuke.stapler.DataBoundConstructor;
-import org.springframework.mail.MailSender;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Set;
+import javax.mail.internet.AddressException;
+import javax.mail.internet.InternetAddress;
+import java.io.UnsupportedEncodingException;
+import java.util.*;
 import java.util.logging.Logger;
 
 @SuppressWarnings({ "unchecked" })
@@ -44,27 +46,74 @@ public class SimpleUpstreamCommittersPublisher extends Notifier {
     }
 
     @Override
-    public boolean perform(AbstractBuild<?,?> build, Launcher launcher, BuildListener listener) throws InterruptedException {
+    public boolean perform(AbstractBuild<?,?> build, Launcher launcher, BuildListener listener) throws InterruptedException, UnsupportedEncodingException {
         if (build.getResult() != Result.SUCCESS && build.getCause(Cause.UpstreamCause.class) != null)
         {
             ArrayList<Cause.UpstreamCause> upstreamCauses = getUpstreamCauses(build);
             ArrayList<AbstractProject> upstreamProjects = getUpstreamProjects(upstreamCauses);
+            Set<User> culprits = getCulprits(upstreamCauses);
 
             if (!upstreamProjects.isEmpty()) {
 
-                Collection<String> namesCollection = Collections2.transform(upstreamProjects, new Function<AbstractProject, String>() {
-                    public String apply(AbstractProject from) {
-                        return from.getName();
+                Collection projectNames = getProjectNames(upstreamProjects);
+
+                listener.getLogger().println("Upstream projects changes detected. Mailing upstream committers in the following projects:");
+                listener.getLogger().println(StringUtils.join(projectNames, ","));
+
+                Set<InternetAddress> internetAddresses = buildCulpritList(listener, culprits);
+
+                Collection<String> emailAddressCollection = Collections2.transform(internetAddresses, new Function<InternetAddress, String>() {
+                    public String apply(InternetAddress from) {
+                        return from.getAddress();
                     }
                 });
 
-                listener.getLogger().println("Upstream projects changes detected. Mailing upstream committers in the following projects:");
-                listener.getLogger().println(StringUtils.join(namesCollection, ","));
-
-                return new hudson.tasks.MailSender( "", false, sendToIndividuals, "UTF-8", upstreamProjects).execute(build,listener);
+                return new hudson.tasks.MailSender(StringUtils.join(emailAddressCollection, ","), false, true, "UTF-8").execute(build,listener);
             }
         }
         return true;
+    }
+
+    private Set<InternetAddress> buildCulpritList(BuildListener listener, Set<User> culprits) throws UnsupportedEncodingException {
+        Set<InternetAddress> r = new HashSet<InternetAddress>();
+        for (User a : culprits) {
+            String addresses = Util.fixEmpty(a.getProperty(hudson.tasks.Mailer.UserProperty.class).getAddress());
+
+            listener.getLogger().println("  User "+a.getId()+" -> "+addresses);
+
+            if (addresses != null)
+                try {
+                    r.add(hudson.tasks.Mailer.StringToAddress(addresses, "UTF-8"));
+                } catch(AddressException e) {
+                    listener.getLogger().println("Invalid address: " + addresses);
+                }
+            else {
+                listener.getLogger().println(hudson.tasks.i18n.Messages.MailSender_NoAddress(a.getFullName()));
+            }
+        }
+        return r;
+    }
+
+    private Set<User> getCulprits(ArrayList<Cause.UpstreamCause> upstreamCauses) {
+
+        Set<User> culprits = new HashSet<User>();
+
+        for (Cause.UpstreamCause cause : upstreamCauses) {
+            AbstractBuild build = ((AbstractProject)Jenkins.getInstance().getItem(cause.getUpstreamProject())).getBuildByNumber(cause.getUpstreamBuild());
+            culprits.addAll(build.getCulprits());
+        }
+
+        return culprits;
+    }
+
+    private Collection<String> getProjectNames(Collection<AbstractProject> projects) {
+        Collection<String> namesCollection = Collections2.transform(projects, new Function<AbstractProject, String>() {
+            public String apply(AbstractProject from) {
+                return from.getName();
+            }
+        });
+
+        return namesCollection;
     }
 
     private ArrayList<AbstractProject> getUpstreamProjects(ArrayList<Cause.UpstreamCause> upstreamCauses) {
