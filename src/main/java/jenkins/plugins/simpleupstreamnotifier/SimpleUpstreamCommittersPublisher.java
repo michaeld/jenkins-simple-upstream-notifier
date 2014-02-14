@@ -10,24 +10,19 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Notifier;
 import hudson.tasks.Publisher;
-import hudson.tasks.i18n.*;
 import jenkins.model.Jenkins;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.Predicate;
 import org.apache.commons.lang.StringUtils;
-import org.apache.tools.ant.taskdefs.email.Mailer;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 import javax.mail.internet.AddressException;
 import javax.mail.internet.InternetAddress;
 import java.io.UnsupportedEncodingException;
 import java.util.*;
-import java.util.logging.Logger;
 
 @SuppressWarnings({ "unchecked" })
 public class SimpleUpstreamCommittersPublisher extends Notifier {
-    //public static final DescriptorImpl DESCRIPTOR = new DescriptorImpl();
-    protected static final Logger LOGGER = Logger.getLogger(Mailer.class.getName());
 
     public boolean sendToIndividuals = false;
 
@@ -47,31 +42,46 @@ public class SimpleUpstreamCommittersPublisher extends Notifier {
 
     @Override
     public boolean perform(AbstractBuild<?,?> build, Launcher launcher, BuildListener listener) throws InterruptedException, UnsupportedEncodingException {
+
         if (build.getResult() != Result.SUCCESS && build.getCause(Cause.UpstreamCause.class) != null)
         {
             ArrayList<Cause.UpstreamCause> upstreamCauses = getUpstreamCauses(build);
             ArrayList<AbstractProject> upstreamProjects = getUpstreamProjects(upstreamCauses);
             Set<User> culprits = getCulprits(upstreamCauses);
 
-            if (!upstreamProjects.isEmpty()) {
-
-                Collection projectNames = getProjectNames(upstreamProjects);
-
-                listener.getLogger().println("Upstream projects changes detected. Mailing upstream committers in the following projects:");
-                listener.getLogger().println(StringUtils.join(projectNames, ","));
-
-                Set<InternetAddress> internetAddresses = buildCulpritList(listener, culprits);
-
-                Collection<String> emailAddressCollection = Collections2.transform(internetAddresses, new Function<InternetAddress, String>() {
-                    public String apply(InternetAddress from) {
-                        return from.getAddress();
-                    }
-                });
-
-                return new hudson.tasks.MailSender(StringUtils.join(emailAddressCollection, ","), false, true, "UTF-8").execute(build,listener);
+            if (upstreamProjects.isEmpty()) {
+                listener.getLogger().println("No upstream projects found");
+                return true;
             }
+
+            Collection projectNames = getProjectNames(upstreamProjects);
+
+            if (culprits.isEmpty()) {
+                listener.getLogger().println("No culprits found in the following projects:");
+                listener.getLogger().println(StringUtils.join(projectNames, ","));
+                return true;
+            }
+
+            listener.getLogger().println("Upstream projects changes detected. Mailing upstream committers in the following projects:");
+            listener.getLogger().println(StringUtils.join(projectNames, ","));
+
+            Set<InternetAddress> internetAddresses = buildCulpritList(listener, culprits);
+            Collection emails = getEmails(internetAddresses);
+
+            return new hudson.tasks.MailSender(StringUtils.join(emails, ","), false, true, "UTF-8").execute(build,listener);
+
         }
         return true;
+    }
+
+    private Collection<String> getEmails(Set<InternetAddress> internetAddresses) {
+        Collection<String> emailAddressCollection = Collections2.transform(internetAddresses, new Function<InternetAddress, String>() {
+            public String apply(InternetAddress from) {
+                return from.getAddress();
+            }
+        });
+
+        return emailAddressCollection;
     }
 
     private Set<InternetAddress> buildCulpritList(BuildListener listener, Set<User> culprits) throws UnsupportedEncodingException {
@@ -122,7 +132,7 @@ public class SimpleUpstreamCommittersPublisher extends Notifier {
 
         for (Cause.UpstreamCause cause : upstreamCauses) {
             String project = cause.getUpstreamProject();
-            projects.add((AbstractProject)Jenkins.getInstance().getItem(project));
+            projects.add((AbstractProject) Jenkins.getInstance().getItem(project));
         }
 
         return projects;
