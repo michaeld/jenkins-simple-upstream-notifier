@@ -43,35 +43,32 @@ public class SimpleUpstreamCommittersPublisher extends Notifier {
     @Override
     public boolean perform(AbstractBuild<?,?> build, Launcher launcher, BuildListener listener) throws InterruptedException, UnsupportedEncodingException {
 
-        if (build.getResult() != Result.SUCCESS && build.getCause(Cause.UpstreamCause.class) != null)
-        {
-            ArrayList<Cause.UpstreamCause> upstreamCauses = getUpstreamCauses(build);
-            ArrayList<AbstractProject> upstreamProjects = getUpstreamProjects(upstreamCauses);
-            Set<User> culprits = getCulprits(upstreamCauses);
+        if (build.getResult() == Result.SUCCESS || build.getCause(Cause.UpstreamCause.class) == null) return true;
 
-            if (upstreamProjects.isEmpty()) {
-                listener.getLogger().println("No upstream projects found");
-                return true;
-            }
+        ArrayList<Cause.UpstreamCause> upstreamCauses = getUpstreamCauses(build);
+        ArrayList<AbstractProject> upstreamProjects = getUpstreamProjects(upstreamCauses);
+        Set<User> culprits = getCulprits(upstreamCauses);
 
-            Collection projectNames = getProjectNames(upstreamProjects);
-
-            if (culprits.isEmpty()) {
-                listener.getLogger().println("No culprits found in the following projects:");
-                listener.getLogger().println(StringUtils.join(projectNames, ","));
-                return true;
-            }
-
-            listener.getLogger().println("Upstream projects changes detected. Mailing upstream committers in the following projects:");
-            listener.getLogger().println(StringUtils.join(projectNames, ","));
-
-            Set<InternetAddress> internetAddresses = buildCulpritList(listener, culprits);
-            Collection emails = getEmails(internetAddresses);
-
-            return new hudson.tasks.MailSender(StringUtils.join(emails, ","), false, true, "UTF-8").execute(build,listener);
-
+        if (upstreamProjects.isEmpty()) {
+            listener.getLogger().println("No upstream projects found");
+            return true;
         }
-        return true;
+
+        Collection projectNames = getProjectNames(upstreamProjects);
+
+        if (culprits.isEmpty()) {
+            listener.getLogger().println("No culprits found in the following projects:");
+            listener.getLogger().println(StringUtils.join(projectNames, ","));
+            return true;
+        }
+
+        listener.getLogger().println("Upstream projects changes detected. Mailing upstream committers in the following projects:");
+        listener.getLogger().println(StringUtils.join(projectNames, ","));
+
+        Set<InternetAddress> internetAddresses = buildCulpritList(listener, culprits);
+        Collection emails = getEmails(internetAddresses);
+
+        return new hudson.tasks.MailSender(StringUtils.join(emails, ","), false, true, "UTF-8").execute(build,listener);
     }
 
     private Collection<String> getEmails(Set<InternetAddress> internetAddresses) {
